@@ -45,7 +45,6 @@ ensure_go() {
 
 fetch_source() {
   tmpdir=$(mktemp -d)
-  trap 'rm -rf "$tmpdir"' EXIT
   if command -v git >/dev/null 2>&1; then
     git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$tmpdir/src" >/dev/null 2>&1
   else
@@ -59,6 +58,7 @@ fetch_source() {
 
 ensure_go
 src_dir=$(fetch_source)
+trap 'rm -rf "$(dirname "$src_dir")"' EXIT
 
 ( cd "$src_dir" && go build -o "$INSTALL_BIN_NAME" ./cmd/clio )
 
