@@ -45,15 +45,28 @@ ensure_go() {
 
 fetch_source() {
   tmpdir=$(mktemp -d)
+  src="$tmpdir/src"
+  mkdir -p "$src"
+
   if command -v git >/dev/null 2>&1; then
-    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$tmpdir/src" >/dev/null 2>&1
-  else
-    curl -sSL "$REPO_URL/archive/refs/heads/${BRANCH}.tar.gz" -o "$tmpdir/src.tgz"
-    mkdir -p "$tmpdir/src"
-    tar -xzf "$tmpdir/src.tgz" -C "$tmpdir"
-    mv "$tmpdir"/*/ "$tmpdir/src/"
+    if ! git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$src" >/dev/null 2>&1; then
+      echo "git clone failed, falling back to tarball download" >&2
+      rm -rf "$src"
+      mkdir -p "$src"
+    fi
   fi
-  echo "$tmpdir/src"
+
+  if [ ! -f "$src/go.mod" ]; then
+    curl -sSL "$REPO_URL/archive/refs/heads/${BRANCH}.tar.gz" -o "$tmpdir/src.tgz"
+    tar -xzf "$tmpdir/src.tgz" --strip-components=1 -C "$src"
+  fi
+
+  if [ ! -f "$src/go.mod" ]; then
+    echo "Failed to fetch source code." >&2
+    exit 1
+  fi
+
+  echo "$src"
 }
 
 ensure_go
