@@ -102,3 +102,7 @@ go test ./... -cover
 - `make test`
 - `make install`
 - `make release`
+
+# Clio TUI Contracts
+
+Este repositorio contem os contratos de layout, estado, snapshots e diffs para a TUI.
