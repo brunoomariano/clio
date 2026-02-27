@@ -49,8 +49,16 @@ func renderChips(boost, exclude []string) string {
 	if len(exclude) > 0 {
 		excludeChip = "-" + strings.Join(exclude, ",-")
 	}
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	return style.Render(strings.TrimSpace(strings.Join([]string{boostChip, excludeChip}, "  ")))
+	boostStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+	excludeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("204")).Bold(true)
+	parts := make([]string, 0, 2)
+	if boostChip != "" {
+		parts = append(parts, boostStyle.Render(boostChip))
+	}
+	if excludeChip != "" {
+		parts = append(parts, excludeStyle.Render(excludeChip))
+	}
+	return strings.TrimSpace(strings.Join(parts, "  "))
 }
 
 func formatExpiry(note *model.Note) string {

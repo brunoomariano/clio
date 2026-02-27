@@ -30,6 +30,7 @@ const (
 	modeExpiry
 	modeBoost
 	modeExclude
+	modeMenu
 )
 
 type editorFinishedMsg struct {
@@ -50,25 +51,28 @@ type WatcherMsg struct {
 
 // Model is the Bubble Tea model for the application.
 type Model struct {
-	cfg     model.Config
-	store   *store.NoteStore
-	index   *index.Index
-	deb     index.DebouncedExecutor[[]index.SearchResult]
-	ctx     context.Context
-	cancel  context.CancelFunc
-	keyMap  keyMap
-	help    help.Model
-	list    list.Model
-	view    viewport.Model
-	search  textinput.Model
-	prompt  textinput.Model
-	mode    inputMode
-	regex   bool
-	status  string
-	boost   []string
-	exclude []string
-	width   int
-	height  int
+	cfg         model.Config
+	store       *store.NoteStore
+	index       *index.Index
+	deb         index.DebouncedExecutor[[]index.SearchResult]
+	ctx         context.Context
+	cancel      context.CancelFunc
+	keyMap      keyMap
+	help        help.Model
+	list        list.Model
+	menu        list.Model
+	view        viewport.Model
+	search      textinput.Model
+	prompt      textinput.Model
+	mode        inputMode
+	regex       bool
+	status      string
+	boost       []string
+	exclude     []string
+	width       int
+	height      int
+	pendingQuit bool
+	resultCount int
 }
 
 func New(cfg model.Config, store *store.NoteStore, idx *index.Index) *Model {
@@ -88,6 +92,12 @@ func New(cfg model.Config, store *store.NoteStore, idx *index.Index) *Model {
 	lst.SetFilteringEnabled(false)
 	lst.Styles.Title = lipgloss.NewStyle()
 
+	menu := list.New(menuItems(), list.NewDefaultDelegate(), 0, 0)
+	menu.SetShowHelp(false)
+	menu.SetShowStatusBar(false)
+	menu.SetFilteringEnabled(false)
+	menu.Title = "CLIO MENU"
+
 	vp := viewport.New(0, 0)
 	vp.Style = lipgloss.NewStyle().Padding(0, 1)
 
@@ -99,6 +109,7 @@ func New(cfg model.Config, store *store.NoteStore, idx *index.Index) *Model {
 		keyMap: newKeyMap(),
 		help:   help.New(),
 		list:   lst,
+		menu:   menu,
 		view:   vp,
 		search: search,
 		prompt: prompt,
@@ -151,6 +162,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmd, m.runSearch())
 			}
 		}
+	} else if m.mode == modeMenu {
+		m.menu, cmd = m.menu.Update(msg)
 	} else {
 		m.prompt, cmd = m.prompt.Update(msg)
 	}
@@ -163,61 +176,70 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) View() string {
 	header := m.renderHeader()
+	searchBar := m.renderSearchBar()
+	stats := m.renderStats()
+	pattern := m.renderPatternLine()
 	left := m.renderLeft()
 	right := m.renderRight()
 	footer := m.renderFooter()
-	layout := lipgloss.NewStyle().Width(m.width).Height(m.height - lipgloss.Height(header) - lipgloss.Height(footer) - 1)
+
+	bodyHeight := m.height - lipgloss.Height(header) - lipgloss.Height(searchBar) - lipgloss.Height(stats) - lipgloss.Height(pattern) - lipgloss.Height(footer) - 1
+	if bodyHeight < 3 {
+		bodyHeight = 3
+	}
+	layout := lipgloss.NewStyle().Width(m.width).Height(bodyHeight)
 	columns := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	body := layout.Render(columns)
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	if m.mode == modeMenu {
+		body = m.renderMenuOverlay(bodyHeight)
+	}
+
+	wrapped := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(0, 1).
+		UnsetForeground().
+		UnsetBackground().
+		Render(lipgloss.JoinVertical(lipgloss.Left, header, searchBar, stats, pattern, body, footer))
+
+	return wrapped
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
-	if m.mode != modeSearch && msg.Type == tea.KeyEnter {
-		return true, m.applyPrompt()
+	if msg.Type != tea.KeyCtrlC && m.pendingQuit {
+		m.pendingQuit = false
+		if m.status == "Press CTRL+C again to quit" {
+			m.status = ""
+		}
 	}
-	if m.mode != modeSearch && msg.Type == tea.KeyEsc {
-		m.mode = modeSearch
-		m.prompt.Reset()
-		m.prompt.Blur()
-		m.search.Focus()
+
+	if key.Matches(msg, m.keyMap.Menu) {
+		if m.mode == modeMenu {
+			m.mode = modeSearch
+			m.search.Focus()
+			return true, nil
+		}
+		m.mode = modeMenu
 		return true, nil
 	}
 
-	switch {
-	case key.Matches(msg, m.keyMap.Quit):
-		if m.cancel != nil {
-			m.cancel()
+	if msg.Type == tea.KeyCtrlC {
+		if m.pendingQuit {
+			if m.cancel != nil {
+				m.cancel()
+			}
+			return true, tea.Quit
 		}
-		return true, tea.Quit
-	case key.Matches(msg, m.keyMap.FocusSearch):
-		m.mode = modeSearch
-		m.search.Focus()
-		m.prompt.Blur()
+		m.pendingQuit = true
+		m.status = "Press CTRL+C again to quit"
 		return true, nil
-	case key.Matches(msg, m.keyMap.Regex):
-		m.regex = !m.regex
-		return true, m.runSearch()
-	case key.Matches(msg, m.keyMap.Boost):
-		m.activatePrompt(modeBoost, "Boost tag")
-		return true, nil
-	case key.Matches(msg, m.keyMap.Exclude):
-		m.activatePrompt(modeExclude, "Exclude tag")
-		return true, nil
-	case key.Matches(msg, m.keyMap.Tags):
-		m.activatePrompt(modeTags, "Tags (comma separated)")
-		return true, nil
-	case key.Matches(msg, m.keyMap.Expiry):
-		m.activatePrompt(modeExpiry, "Expiry RFC3339 (empty clears)")
-		return true, nil
-	case key.Matches(msg, m.keyMap.New):
-		return true, m.createNoteCmd()
-	case key.Matches(msg, m.keyMap.Edit):
-		return true, m.editSelectedCmd()
-	case key.Matches(msg, m.keyMap.Open):
-		return true, m.editSelectedCmd()
-	case key.Matches(msg, m.keyMap.Delete):
-		return true, m.deleteSelectedCmd()
+	}
+
+	if m.mode == modeMenu && msg.Type == tea.KeyEnter {
+		return true, m.applyMenu()
+	}
+	if m.mode != modeSearch && msg.Type == tea.KeyEnter {
+		return true, m.applyPrompt()
 	}
 
 	return false, nil
@@ -271,6 +293,67 @@ func (m *Model) applyPrompt() tea.Cmd {
 	}
 	m.mode = modeSearch
 	return m.runSearch()
+}
+
+type menuItem string
+
+func (m menuItem) Title() string       { return string(m) }
+func (m menuItem) Description() string { return "" }
+func (m menuItem) FilterValue() string { return string(m) }
+
+func menuItems() []list.Item {
+	return []list.Item{
+		menuItem("New note"),
+		menuItem("Open/Edit"),
+		menuItem("Delete"),
+		menuItem("Edit tags"),
+		menuItem("Set/Clear expiry"),
+		menuItem("Toggle regex"),
+		menuItem("Add boost tag"),
+		menuItem("Add exclude tag"),
+		menuItem("Quit"),
+	}
+}
+
+func (m *Model) applyMenu() tea.Cmd {
+	item := m.menu.SelectedItem()
+	if item == nil {
+		return nil
+	}
+	switch item.(menuItem) {
+	case "New note":
+		m.mode = modeSearch
+		return m.createNoteCmd()
+	case "Open/Edit":
+		m.mode = modeSearch
+		return m.editSelectedCmd()
+	case "Delete":
+		m.mode = modeSearch
+		return m.deleteSelectedCmd()
+	case "Edit tags":
+		m.activatePrompt(modeTags, "Tags (comma separated)")
+		return nil
+	case "Set/Clear expiry":
+		m.activatePrompt(modeExpiry, "Expiry RFC3339 (empty clears)")
+		return nil
+	case "Toggle regex":
+		m.regex = !m.regex
+		m.mode = modeSearch
+		return m.runSearch()
+	case "Add boost tag":
+		m.activatePrompt(modeBoost, "Boost tag")
+		return nil
+	case "Add exclude tag":
+		m.activatePrompt(modeExclude, "Exclude tag")
+		return nil
+	case "Quit":
+		m.pendingQuit = true
+		m.status = "Press CTRL+C again to quit"
+		m.mode = modeSearch
+		return nil
+	default:
+		return nil
+	}
 }
 
 func splitTags(value string) []string {
@@ -357,6 +440,7 @@ func (m *Model) applyResults(results []index.SearchResult) {
 	for _, res := range results {
 		items = append(items, noteItem{note: res.Note})
 	}
+	m.resultCount = len(results)
 	m.list.SetItems(items)
 	if len(items) > 0 {
 		m.list.Select(0)
@@ -382,10 +466,17 @@ func (m *Model) updateViewport() {
 }
 
 func (m *Model) renderHeader() string {
-	title := lipgloss.NewStyle().Bold(true).Render("CLIO")
-	count := fmt.Sprintf("%d notes", m.index.NotesCount())
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("213")).
+		Render("CLIO")
+	count := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("109")).
+		Render(fmt.Sprintf("%d notes", m.index.NotesCount()))
 	mode := "SEARCH"
-	if m.mode != modeSearch {
+	if m.mode == modeMenu {
+		mode = "MENU"
+	} else if m.mode != modeSearch {
 		mode = "PROMPT"
 	}
 	regex := "REGEX OFF"
@@ -396,17 +487,23 @@ func (m *Model) renderHeader() string {
 	if m.status != "" {
 		status = " | " + m.status
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Left, title, "  ", count, "  ", mode, "  ", regex, status)
+	return lipgloss.JoinHorizontal(lipgloss.Left,
+		title,
+		"  ",
+		count,
+		"  ",
+		lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Render(mode),
+		"  ",
+		lipgloss.NewStyle().Foreground(lipgloss.Color("204")).Render(regex),
+		status,
+	)
 }
 
 func (m *Model) renderLeft() string {
-	input := m.search.View()
-	if m.mode != modeSearch {
-		input = m.prompt.View()
-	}
 	chips := renderChips(m.boost, m.exclude)
 	left := lipgloss.NewStyle().Width(m.width/2-1).Padding(0, 1)
-	return left.Render(lipgloss.JoinVertical(lipgloss.Left, input, chips, m.list.View()))
+	content := lipgloss.JoinVertical(lipgloss.Left, chips, m.list.View())
+	return left.Render(content)
 }
 
 func (m *Model) renderRight() string {
@@ -426,8 +523,119 @@ func (m *Model) resize() {
 	rightWidth := m.width - leftWidth - 4
 	m.list.SetWidth(leftWidth)
 	m.list.SetHeight(m.height - 6)
+	m.menu.SetWidth(56)
+	m.menu.SetHeight(16)
 	m.view.Width = rightWidth
 	m.view.Height = m.height - 6
+}
+
+func (m *Model) renderSearchBar() string {
+	display := m.search.Value()
+	if m.mode != modeSearch && m.mode != modeMenu {
+		display = m.prompt.Value()
+	}
+	if strings.TrimSpace(display) == "" {
+		display = "Search notes..."
+	}
+
+	switchText := "REGEX OFF"
+	if m.regex {
+		switchText = "REGEX ON"
+	}
+
+	bar := fmt.Sprintf(" SEARCH: %s  [ %s ] ", display, switchText)
+
+	barStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		Background(lipgloss.Color("235")).
+		Padding(0, 2).
+		Bold(true)
+
+	if m.regex {
+		barStyle = barStyle.Background(lipgloss.Color("24"))
+	}
+
+	return lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Render(barStyle.Render(bar))
+}
+
+func (m *Model) renderStats() string {
+	stats := fmt.Sprintf("%d results  •  %d total", m.resultCount, m.index.NotesCount())
+	statsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	return lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Render(statsStyle.Render(stats))
+}
+
+func (m *Model) renderPatternLine() string {
+	if m.width <= 0 {
+		return ""
+	}
+	pattern := strings.Repeat(".:", (m.width/2)+2)
+	pattern = pattern[:max(1, m.width)]
+	return lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Foreground(lipgloss.Color("236")).Render(pattern)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (m *Model) renderMenuOverlay(bodyHeight int) string {
+	menuBox := lipgloss.NewStyle().
+		Width(60).
+		Padding(1, 3).
+		Border(lipgloss.ThickBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Render(m.menu.View())
+	return lipgloss.Place(m.width, bodyHeight, lipgloss.Center, lipgloss.Center, menuBox)
+}
+
+func resolveTerminal(preferred string) string {
+	candidates := []string{}
+	if preferred != "" {
+		candidates = append(candidates, preferred)
+	}
+	if env := os.Getenv("TERMINAL"); env != "" {
+		candidates = append(candidates, env)
+	}
+	candidates = append(candidates,
+		"x-terminal-emulator",
+		"gnome-terminal",
+		"kitty",
+		"alacritty",
+		"wezterm",
+		"foot",
+		"konsole",
+		"xfce4-terminal",
+		"lxterminal",
+		"tilix",
+	)
+	for _, term := range candidates {
+		if _, err := exec.LookPath(term); err == nil {
+			return term
+		}
+	}
+	return ""
+}
+
+func terminalArgs(term, editor, path string) []string {
+	switch term {
+	case "kitty", "wezterm", "alacritty", "foot", "konsole", "xfce4-terminal", "lxterminal", "tilix":
+		return []string{"-e", editor, path}
+	case "gnome-terminal":
+		return []string{"--", editor, path}
+	case "x-terminal-emulator":
+		return []string{"-e", editor, path}
+	default:
+		return []string{"-e", editor, path}
+	}
 }
 
 func (m *Model) createNoteCmd() tea.Cmd {
@@ -466,11 +674,26 @@ func (m *Model) deleteSelectedCmd() tea.Cmd {
 }
 
 func (m *Model) openEditor(path string) tea.Msg {
-	editor := os.Getenv("EDITOR")
+	editor := m.cfg.Editor
 	if editor == "" {
+		editor = "nvim"
+	}
+	if _, err := exec.LookPath(editor); err != nil {
 		editor = "nano"
 	}
-	cmd := exec.Command(editor, path)
+
+	terminal := resolveTerminal(m.cfg.Terminal)
+	if terminal == "" {
+		// Fallback to direct editor in current terminal.
+		cmd := exec.Command(editor, path)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return editorFinishedMsg{path: path, err: cmd.Run()}
+	}
+
+	args := terminalArgs(terminal, editor, path)
+	cmd := exec.Command(terminal, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

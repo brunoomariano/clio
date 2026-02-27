@@ -15,6 +15,8 @@ type Config struct {
 	BoostWeight float64 `yaml:"boost_weight"`
 	DebounceMS  int     `yaml:"debounce_ms"`
 	MaxResults  int     `yaml:"max_results"`
+	Editor      string  `yaml:"editor"`
+	Terminal    string  `yaml:"terminal"`
 }
 
 func DefaultConfig(home string) Config {
@@ -25,6 +27,8 @@ func DefaultConfig(home string) Config {
 		BoostWeight: 2.0,
 		DebounceMS:  100,
 		MaxResults:  200,
+		Editor:      "nvim",
+		Terminal:    "",
 	}
 }
 

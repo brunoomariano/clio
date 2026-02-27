@@ -50,19 +50,16 @@ Default notes directory:
 ~/.local/share/clio/notes
 ```
 
+Editor configuration (default `nvim`, fallback to `nano` if editor missing):
+
+```
+editor: "nvim"
+terminal: ""   # optional; if empty, auto-detects a terminal
+```
+
 ## Key Bindings
 
-- `/` focus search
-- `enter` open
-- `n` new
-- `e` edit
-- `d` delete
-- `t` edit tags
-- `x` set/clear expiry
-- `r` toggle regex
-- `+` add boost tag
-- `-` add exclude tag
-- `q` quit
+- `?` open menu (all actions live here)
 
 ## Architecture
 
