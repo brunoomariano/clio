@@ -12,7 +12,7 @@ Clio is a fast, minimalist TUI for personal notes in Markdown. It prioritizes pe
 Single-command install/update:
 
 ```bash
-curl -sSL <INSTALL_SCRIPT_URL> | bash
+curl -sSL https://raw.githubusercontent.com/brunoomariano/clio/main/install.sh | bash
 ```
 
 The installer:
@@ -24,10 +24,10 @@ The installer:
 
 ## Update
 
-Run the same install command again:
+Run the same install command again to update to the latest version:
 
 ```bash
-curl -sSL <INSTALL_SCRIPT_URL> | bash
+curl -sSL https://raw.githubusercontent.com/brunoomariano/clio/main/install.sh | bash
 ```
 
 ## Usage

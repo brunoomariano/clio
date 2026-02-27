@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL=${REPO_URL:-"https://github.com/youruser/clio"}
+REPO_URL=${REPO_URL:-"https://github.com/brunoomariano/clio"}
 BRANCH=${BRANCH:-"main"}
 INSTALL_BIN_NAME="clio"
 
