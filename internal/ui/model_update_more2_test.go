@@ -53,13 +53,16 @@ func TestUpdateWatcherSuccess(t *testing.T) {
 	}
 }
 
-// TestHandleKeyQuit verifies that quit key returns a quit command.
-// This ensures quit behavior is wired correctly.
+// TestHandleKeyQuit verifies that exit requires pressing CTRL+C twice.
 func TestHandleKeyQuit(t *testing.T) {
 	m := New(model.Config{MaxResults: 10}, store.NewNoteStore(t.TempDir()), index.NewIndex())
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatalf("expected first ctrl+c to only arm quit")
+	}
+	_, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd == nil {
-		t.Fatalf("expected quit command")
+		t.Fatalf("expected quit command on second ctrl+c")
 	}
 }
 

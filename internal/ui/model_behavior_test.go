@@ -20,14 +20,12 @@ func newTestModel(t *testing.T) *Model {
 	return m
 }
 
-// TestHandleKeyFocusSearch verifies that pressing '/' switches back to search mode
-// and focuses the search input.
-// This ensures users can quickly return to search from prompt modes.
+// TestHandleKeyFocusSearch verifies that ESC returns to search mode from prompts.
 func TestHandleKeyFocusSearch(t *testing.T) {
 	m := newTestModel(t)
 	m.mode = modeTags
 	m.prompt.Focus()
-	handled, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	handled, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	if !handled {
 		t.Fatalf("expected handled key")
 	}
@@ -39,26 +37,30 @@ func TestHandleKeyFocusSearch(t *testing.T) {
 	}
 }
 
-// TestHandleKeyRegexToggle verifies that regex mode toggles on key press.
-// This ensures regex search can be enabled quickly.
+// TestHandleKeyRegexToggle verifies that regex mode toggles via menu action.
 func TestHandleKeyRegexToggle(t *testing.T) {
 	m := newTestModel(t)
 	m.regex = false
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m.mode = modeMenu
+	m.menu.Select(5)
+	m.applyMenu()
 	if !m.regex {
 		t.Fatalf("expected regex to be enabled")
 	}
 }
 
-// TestHandleKeyPromptModes verifies that boost and exclude keys activate prompts.
-// This ensures tag filters can be edited from the keyboard.
+// TestHandleKeyPromptModes verifies that menu entries activate prompt modes.
 func TestHandleKeyPromptModes(t *testing.T) {
 	m := newTestModel(t)
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	m.mode = modeMenu
+	m.menu.Select(6)
+	m.applyMenu()
 	if m.mode != modeBoost {
 		t.Fatalf("expected modeBoost, got %v", m.mode)
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}})
+	m.mode = modeMenu
+	m.menu.Select(7)
+	m.applyMenu()
 	if m.mode != modeExclude {
 		t.Fatalf("expected modeExclude, got %v", m.mode)
 	}

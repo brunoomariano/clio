@@ -12,7 +12,7 @@ import (
 func TestLoadOrCreateConfigWithExistingAndDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "clio.yaml")
-	if err := os.WriteFile(path, []byte("notes_dir: \"~/notes\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("search_dirs:\n  - path: \"~/notes\"\n"), 0o644); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 	cfg, err := LoadOrCreateConfig(path)

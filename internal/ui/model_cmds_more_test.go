@@ -3,7 +3,6 @@ package ui
 import (
 	"os"
 	"testing"
-	"time"
 
 	"clio/internal/index"
 	"clio/internal/model"
@@ -28,8 +27,8 @@ func TestCreateEditDeleteCommands(t *testing.T) {
 	m := New(model.Config{MaxResults: 10}, st, idx)
 
 	createMsg := m.createNoteCmd()()
-	if _, ok := createMsg.(editorFinishedMsg); !ok {
-		t.Fatalf("expected editorFinishedMsg from create")
+	if _, ok := createMsg.(requestOpenEditorMsg); !ok {
+		t.Fatalf("expected requestOpenEditorMsg from create")
 	}
 
 	notes := idx.AllNotes()
@@ -39,27 +38,12 @@ func TestCreateEditDeleteCommands(t *testing.T) {
 
 	m.applyResults([]index.SearchResult{{Note: notes[0], Score: 1}})
 	editMsg := m.editSelectedCmd()()
-	if _, ok := editMsg.(editorFinishedMsg); !ok {
-		t.Fatalf("expected editorFinishedMsg from edit")
+	if _, ok := editMsg.(requestOpenEditorMsg); !ok {
+		t.Fatalf("expected requestOpenEditorMsg from edit")
 	}
 
 	deleteMsg := m.deleteSelectedCmd()()
 	if _, ok := deleteMsg.(searchResultsMsg); !ok {
 		t.Fatalf("expected searchResultsMsg from delete")
-	}
-}
-
-// TestOpenEditor verifies that the editor command runs successfully.
-// This ensures external editor integration is functional.
-func TestOpenEditor(t *testing.T) {
-	withEditor(t, "/bin/true")
-	m := New(model.Config{}, store.NewNoteStore(t.TempDir()), index.NewIndex())
-	path := m.store.NotePath("x")
-	if err := model.SaveNoteAtomic(path, &model.Note{ID: "x", Title: "t", CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
-		t.Fatalf("save note failed: %v", err)
-	}
-	msg := m.openEditor(path)
-	if res, ok := msg.(editorFinishedMsg); !ok || res.err != nil {
-		t.Fatalf("expected successful editor run")
 	}
 }

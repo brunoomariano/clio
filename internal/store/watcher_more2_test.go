@@ -28,3 +28,29 @@ func TestStartWatcherIgnoresTemp(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+// TestStartWatcherDirs verifies multi-root watcher setup succeeds.
+func TestStartWatcherDirs(t *testing.T) {
+	root := t.TempDir()
+	a := filepath.Join(root, "a")
+	b := filepath.Join(root, "b")
+	if err := os.MkdirAll(a, 0o755); err != nil {
+		t.Fatalf("mkdir a failed: %v", err)
+	}
+	if err := os.MkdirAll(b, 0o755); err != nil {
+		t.Fatalf("mkdir b failed: %v", err)
+	}
+	ch, closeFn, err := StartWatcherDirs([]string{a, b})
+	if err != nil {
+		t.Fatalf("start watcher dirs failed: %v", err)
+	}
+	defer func() { _ = closeFn() }()
+	if err := os.WriteFile(filepath.Join(a, "x.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected event")
+	}
+}

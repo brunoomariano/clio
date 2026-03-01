@@ -7,12 +7,12 @@ import (
 )
 
 // TestLoadExistingConfig verifies that existing config values are loaded
-// and notes_dir is expanded.
+// and search_dirs are expanded.
 // This ensures user edits are respected.
 func TestLoadExistingConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "clio.yaml")
-	data := []byte("notes_dir: \"~/my-notes\"\nbm25_k1: 1.5\n")
+	data := []byte("search_dirs:\n  - path: \"~/my-notes\"\nbm25_k1: 1.5\n")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestLoadExistingConfig(t *testing.T) {
 	if cfg.BM25K1 != 1.5 {
 		t.Fatalf("expected bm25_k1 1.5, got %v", cfg.BM25K1)
 	}
-	if filepath.Base(cfg.NotesDir) != "my-notes" {
-		t.Fatalf("expected expanded notes_dir, got %s", cfg.NotesDir)
+	if filepath.Base(cfg.PrimarySearchDir()) != "my-notes" {
+		t.Fatalf("expected expanded search dir, got %s", cfg.PrimarySearchDir())
 	}
 }
