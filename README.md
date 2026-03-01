@@ -38,16 +38,30 @@ Run:
 clio
 ```
 
+Somente pasta atual:
+
+```bash
+clio --cwd
+clio --cwd --suffixes="['*.md','*.json']" --ignore_paths="['test.*']"
+```
+
 Default config:
 
 ```
 ~/.config/clio.yaml
 ```
 
-Default notes directory:
+Default search configuration:
 
 ```
-~/.local/share/clio/notes
+search_dirs:
+  - path: "~/.local/share/clio/notes"
+  - path: "~/work/wiki"
+    suffixes: [".*\\.md$", ".*\\.rst$"] # override do global_suffixes para esta pasta
+    ignore_paths: ["^archive/.*"]       # override do global_ignore_paths para esta pasta
+
+global_suffixes: ["*.md", "*.txt", "*.json", "*.yaml"]
+global_ignore_paths: ["ignore/*", "tests/*"]
 ```
 
 Editor configuration (default `nvim`, fallback to `nano` if editor missing):

@@ -14,7 +14,6 @@ import (
 	"clio/internal/store"
 
 	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -31,6 +30,7 @@ const (
 	modeBoost
 	modeExclude
 	modeMenu
+	modeFileActions
 )
 
 type editorFinishedMsg struct {
@@ -41,6 +41,10 @@ type editorFinishedMsg struct {
 type searchResultsMsg struct {
 	results []index.SearchResult
 	err     error
+}
+
+type requestOpenEditorMsg struct {
+	path string
 }
 
 type WatcherMsg struct {
@@ -61,6 +65,7 @@ type Model struct {
 	help        help.Model
 	list        list.Model
 	menu        list.Model
+	fileMenu    list.Model
 	view        viewport.Model
 	search      textinput.Model
 	prompt      textinput.Model
@@ -73,6 +78,7 @@ type Model struct {
 	height      int
 	pendingQuit bool
 	resultCount int
+	editPath    string
 }
 
 func New(cfg model.Config, store *store.NoteStore, idx *index.Index) *Model {
@@ -98,22 +104,29 @@ func New(cfg model.Config, store *store.NoteStore, idx *index.Index) *Model {
 	menu.SetFilteringEnabled(false)
 	menu.Title = "CLIO MENU"
 
+	fileMenu := list.New(fileActionItems(), list.NewDefaultDelegate(), 0, 0)
+	fileMenu.SetShowHelp(false)
+	fileMenu.SetShowStatusBar(false)
+	fileMenu.SetFilteringEnabled(false)
+	fileMenu.Title = "FILE ACTIONS"
+
 	vp := viewport.New(0, 0)
 	vp.Style = lipgloss.NewStyle().Padding(0, 1)
 
 	return &Model{
-		cfg:    cfg,
-		store:  store,
-		index:  idx,
-		deb:    index.DebouncedExecutor[[]index.SearchResult]{Delay: time.Duration(cfg.DebounceMS) * time.Millisecond},
-		keyMap: newKeyMap(),
-		help:   help.New(),
-		list:   lst,
-		menu:   menu,
-		view:   vp,
-		search: search,
-		prompt: prompt,
-		mode:   modeSearch,
+		cfg:      cfg,
+		store:    store,
+		index:    idx,
+		deb:      index.DebouncedExecutor[[]index.SearchResult]{Delay: time.Duration(cfg.DebounceMS) * time.Millisecond},
+		keyMap:   newKeyMap(),
+		help:     help.New(),
+		list:     lst,
+		menu:     menu,
+		fileMenu: fileMenu,
+		view:     vp,
+		search:   search,
+		prompt:   prompt,
+		mode:     modeSearch,
 	}
 }
 
@@ -136,6 +149,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.applyResults(msg.results)
 		return m, nil
+	case requestOpenEditorMsg:
+		m.editPath = msg.path
+		return m, tea.Quit
 	case editorFinishedMsg:
 		if msg.err != nil {
 			m.status = msg.err.Error()
@@ -157,13 +173,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	if m.mode == modeSearch {
 		m.search, cmd = m.search.Update(msg)
-		if msg, ok := msg.(tea.KeyMsg); ok {
-			if msg.Type == tea.KeyRunes || msg.Type == tea.KeyBackspace || msg.Type == tea.KeyDelete {
-				return m, tea.Batch(cmd, m.runSearch())
-			}
-		}
 	} else if m.mode == modeMenu {
 		m.menu, cmd = m.menu.Update(msg)
+	} else if m.mode == modeFileActions {
+		m.fileMenu, cmd = m.fileMenu.Update(msg)
 	} else {
 		m.prompt, cmd = m.prompt.Update(msg)
 	}
@@ -190,7 +203,7 @@ func (m *Model) View() string {
 	layout := lipgloss.NewStyle().Width(m.width).Height(bodyHeight)
 	columns := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	body := layout.Render(columns)
-	if m.mode == modeMenu {
+	if m.mode == modeMenu || m.mode == modeFileActions {
 		body = m.renderMenuOverlay(bodyHeight)
 	}
 
@@ -206,40 +219,40 @@ func (m *Model) View() string {
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
-	if msg.Type != tea.KeyCtrlC && m.pendingQuit {
-		m.pendingQuit = false
-		if m.status == "Press CTRL+C again to quit" {
-			m.status = ""
-		}
-	}
-
-	if key.Matches(msg, m.keyMap.Menu) {
+	if msg.Type == tea.KeyCtrlC {
 		if m.mode == modeMenu {
-			m.mode = modeSearch
-			m.search.Focus()
+			if m.cancel != nil {
+				m.cancel()
+			}
+			return true, tea.Quit
+		}
+		if m.mode == modeFileActions {
+			m.mode = modeMenu
 			return true, nil
 		}
 		m.mode = modeMenu
 		return true, nil
 	}
 
-	if msg.Type == tea.KeyCtrlC {
-		if m.pendingQuit {
-			if m.cancel != nil {
-				m.cancel()
-			}
-			return true, tea.Quit
-		}
-		m.pendingQuit = true
-		m.status = "Press CTRL+C again to quit"
-		return true, nil
-	}
-
 	if m.mode == modeMenu && msg.Type == tea.KeyEnter {
 		return true, m.applyMenu()
 	}
+	if m.mode == modeFileActions && msg.Type == tea.KeyEnter {
+		return true, m.applyFileActionMenu()
+	}
+	if m.mode == modeSearch && msg.Type == tea.KeyEnter {
+		m.mode = modeFileActions
+		return true, nil
+	}
 	if m.mode != modeSearch && msg.Type == tea.KeyEnter {
 		return true, m.applyPrompt()
+	}
+	if (m.mode == modeMenu || m.mode == modeFileActions || m.mode == modeTags || m.mode == modeExpiry || m.mode == modeBoost || m.mode == modeExclude) && msg.Type == tea.KeyEsc {
+		m.mode = modeSearch
+		m.prompt.Blur()
+		m.prompt.Reset()
+		m.search.Focus()
+		return true, nil
 	}
 
 	return false, nil
@@ -271,12 +284,14 @@ func (m *Model) applyPrompt() tea.Cmd {
 	case modeTags:
 		note := m.selectedNote()
 		if note != nil {
+			var tags []string
 			if value == "" {
-				note.Tags = nil
+				tags = nil
 			} else {
-				note.Tags = splitTags(value)
+				tags = splitTags(value)
 			}
-			_ = m.store.UpdateNote(note)
+			note.Tags = model.NormalizeTags(tags)
+			_ = m.store.SetTagsForPath(note.Path, note.Tags)
 			m.index.Upsert(note)
 		}
 	case modeExpiry:
@@ -304,7 +319,7 @@ func (m menuItem) FilterValue() string { return string(m) }
 func menuItems() []list.Item {
 	return []list.Item{
 		menuItem("New note"),
-		menuItem("Open/Edit"),
+		menuItem("Selected file options"),
 		menuItem("Delete"),
 		menuItem("Edit tags"),
 		menuItem("Set/Clear expiry"),
@@ -324,9 +339,9 @@ func (m *Model) applyMenu() tea.Cmd {
 	case "New note":
 		m.mode = modeSearch
 		return m.createNoteCmd()
-	case "Open/Edit":
-		m.mode = modeSearch
-		return m.editSelectedCmd()
+	case "Selected file options":
+		m.mode = modeFileActions
+		return nil
 	case "Delete":
 		m.mode = modeSearch
 		return m.deleteSelectedCmd()
@@ -347,8 +362,56 @@ func (m *Model) applyMenu() tea.Cmd {
 		m.activatePrompt(modeExclude, "Exclude tag")
 		return nil
 	case "Quit":
-		m.pendingQuit = true
-		m.status = "Press CTRL+C again to quit"
+		if m.cancel != nil {
+			m.cancel()
+		}
+		return tea.Quit
+	default:
+		return nil
+	}
+}
+
+type fileActionItem string
+
+func (m fileActionItem) Title() string       { return string(m) }
+func (m fileActionItem) Description() string { return "" }
+func (m fileActionItem) FilterValue() string { return string(m) }
+
+func fileActionItems() []list.Item {
+	return []list.Item{
+		fileActionItem("Copy file path"),
+		fileActionItem("Open file in editor"),
+		fileActionItem("Back to search"),
+	}
+}
+
+func (m *Model) applyFileActionMenu() tea.Cmd {
+	selected := m.selectedNote()
+	item := m.fileMenu.SelectedItem()
+	if item == nil {
+		return nil
+	}
+	switch item.(fileActionItem) {
+	case "Copy file path":
+		m.mode = modeSearch
+		if selected == nil || selected.Path == "" {
+			m.status = "no file selected"
+			return nil
+		}
+		if err := copyToClipboard(selected.Path); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "path copied"
+		}
+		return nil
+	case "Open file in editor":
+		m.mode = modeSearch
+		if selected == nil {
+			m.status = "no file selected"
+			return nil
+		}
+		return func() tea.Msg { return requestOpenEditorMsg{path: selected.Path} }
+	case "Back to search":
 		m.mode = modeSearch
 		return nil
 	default:
@@ -437,8 +500,9 @@ func (m *Model) allNotes(opts index.SearchOptions) []index.SearchResult {
 
 func (m *Model) applyResults(results []index.SearchResult) {
 	items := make([]list.Item, 0, len(results))
+	query := strings.TrimSpace(m.search.Value())
 	for _, res := range results {
-		items = append(items, noteItem{note: res.Note})
+		items = append(items, noteItem{note: res.Note, query: query})
 	}
 	m.resultCount = len(results)
 	m.list.SetItems(items)
@@ -476,6 +540,8 @@ func (m *Model) renderHeader() string {
 	mode := "SEARCH"
 	if m.mode == modeMenu {
 		mode = "MENU"
+	} else if m.mode == modeFileActions {
+		mode = "FILE ACTIONS"
 	} else if m.mode != modeSearch {
 		mode = "PROMPT"
 	}
@@ -525,6 +591,8 @@ func (m *Model) resize() {
 	m.list.SetHeight(m.height - 6)
 	m.menu.SetWidth(56)
 	m.menu.SetHeight(16)
+	m.fileMenu.SetWidth(56)
+	m.fileMenu.SetHeight(10)
 	m.view.Width = rightWidth
 	m.view.Height = m.height - 6
 }
@@ -573,13 +641,6 @@ func (m *Model) renderPatternLine() string {
 	return lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Foreground(lipgloss.Color("236")).Render(pattern)
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -588,54 +649,41 @@ func max(a, b int) int {
 }
 
 func (m *Model) renderMenuOverlay(bodyHeight int) string {
+	content := m.menu.View()
+	if m.mode == modeFileActions {
+		content = m.fileMenu.View()
+	}
 	menuBox := lipgloss.NewStyle().
 		Width(60).
 		Padding(1, 3).
 		Border(lipgloss.ThickBorder()).
 		BorderForeground(lipgloss.Color("63")).
-		Render(m.menu.View())
+		Render(content)
 	return lipgloss.Place(m.width, bodyHeight, lipgloss.Center, lipgloss.Center, menuBox)
 }
 
-func resolveTerminal(preferred string) string {
-	candidates := []string{}
-	if preferred != "" {
-		candidates = append(candidates, preferred)
+func copyToClipboard(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("empty path")
 	}
-	if env := os.Getenv("TERMINAL"); env != "" {
-		candidates = append(candidates, env)
+	candidates := [][]string{
+		{"pbcopy"},
+		{"wl-copy"},
+		{"xclip", "-selection", "clipboard"},
+		{"xsel", "--clipboard", "--input"},
 	}
-	candidates = append(candidates,
-		"x-terminal-emulator",
-		"gnome-terminal",
-		"kitty",
-		"alacritty",
-		"wezterm",
-		"foot",
-		"konsole",
-		"xfce4-terminal",
-		"lxterminal",
-		"tilix",
-	)
-	for _, term := range candidates {
-		if _, err := exec.LookPath(term); err == nil {
-			return term
+	for _, args := range candidates {
+		if _, err := exec.LookPath(args[0]); err != nil {
+			continue
+		}
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Stdin = strings.NewReader(value)
+		if err := cmd.Run(); err == nil {
+			return nil
 		}
 	}
-	return ""
-}
-
-func terminalArgs(term, editor, path string) []string {
-	switch term {
-	case "kitty", "wezterm", "alacritty", "foot", "konsole", "xfce4-terminal", "lxterminal", "tilix":
-		return []string{"-e", editor, path}
-	case "gnome-terminal":
-		return []string{"--", editor, path}
-	case "x-terminal-emulator":
-		return []string{"-e", editor, path}
-	default:
-		return []string{"-e", editor, path}
-	}
+	return fmt.Errorf("clipboard tool not found")
 }
 
 func (m *Model) createNoteCmd() tea.Cmd {
@@ -646,7 +694,7 @@ func (m *Model) createNoteCmd() tea.Cmd {
 		}
 		m.index.Upsert(note)
 		path := m.store.NotePath(note.ID)
-		return m.openEditor(path)
+		return requestOpenEditorMsg{path: path}
 	}
 }
 
@@ -656,7 +704,7 @@ func (m *Model) editSelectedCmd() tea.Cmd {
 		return nil
 	}
 	path := m.store.NotePath(note.ID)
-	return func() tea.Msg { return m.openEditor(path) }
+	return func() tea.Msg { return requestOpenEditorMsg{path: path} }
 }
 
 func (m *Model) deleteSelectedCmd() tea.Cmd {
@@ -673,55 +721,28 @@ func (m *Model) deleteSelectedCmd() tea.Cmd {
 	}
 }
 
-func (m *Model) openEditor(path string) tea.Msg {
-	editor := m.cfg.Editor
-	if editor == "" {
-		editor = "nvim"
-	}
-	if _, err := exec.LookPath(editor); err != nil {
-		editor = "nano"
-	}
-
-	terminal := resolveTerminal(m.cfg.Terminal)
-	if terminal == "" {
-		// Fallback to direct editor in current terminal.
-		cmd := exec.Command(editor, path)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return editorFinishedMsg{path: path, err: cmd.Run()}
-	}
-
-	args := terminalArgs(terminal, editor, path)
-	cmd := exec.Command(terminal, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return editorFinishedMsg{path: path, err: cmd.Run()}
-}
-
 func (m *Model) refreshFromFile(path string) tea.Cmd {
 	return func() tea.Msg {
 		if path == "" {
 			return searchResultsMsg{results: m.allNotes(index.SearchOptions{MaxResults: m.cfg.MaxResults, Now: time.Now().UTC()})}
 		}
-		if !strings.HasSuffix(path, ".md") {
+		if !m.store.ShouldIndexPath(path) {
 			return nil
 		}
-		data, err := os.ReadFile(filepath.Clean(path))
+		note, err := m.store.LoadNote(filepath.Clean(path))
 		if err != nil {
 			if os.IsNotExist(err) {
-				id := strings.TrimSuffix(filepath.Base(path), ".md")
+				id := m.store.NoteIDForPath(path)
 				m.index.Remove(id)
 				return searchResultsMsg{results: m.allNotes(index.SearchOptions{MaxResults: m.cfg.MaxResults, Now: time.Now().UTC()})}
 			}
 			return editorFinishedMsg{err: err}
 		}
-		note, err := model.ParseNoteBytes(data)
-		if err != nil {
-			return editorFinishedMsg{err: err}
-		}
 		m.index.Upsert(note)
 		return searchResultsMsg{results: m.allNotes(index.SearchOptions{MaxResults: m.cfg.MaxResults, Now: time.Now().UTC()})}
 	}
+}
+
+func (m *Model) PendingEditorPath() string {
+	return m.editPath
 }

@@ -8,7 +8,7 @@ type keyMap struct {
 
 func newKeyMap() keyMap {
 	return keyMap{
-		Menu: key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "menu")),
+		Menu: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "menu/quit")),
 	}
 }
 

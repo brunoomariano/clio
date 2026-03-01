@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,12 +15,23 @@ type WatchEvent struct {
 }
 
 func StartWatcher(dir string) (<-chan WatchEvent, func() error, error) {
+	return startWatcherWithFilter([]string{dir}, isLegacyWatchFile)
+}
+
+func StartWatcherDirs(dirs []string) (<-chan WatchEvent, func() error, error) {
+	return startWatcherWithFilter(dirs, isWatchedFile)
+}
+
+func startWatcherWithFilter(dirs []string, allowed func(path string) bool) (<-chan WatchEvent, func() error, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := watcher.Add(dir); err != nil {
-		return nil, nil, err
+	for _, dir := range dirs {
+		if err := addWatcherDirs(watcher, dir); err != nil {
+			_ = watcher.Close()
+			return nil, nil, err
+		}
 	}
 	ch := make(chan WatchEvent, 16)
 	go func() {
@@ -30,7 +42,13 @@ func StartWatcher(dir string) (<-chan WatchEvent, func() error, error) {
 				if !ok {
 					return
 				}
-				if !isNoteFile(event.Name) {
+				if event.Op&fsnotify.Create == fsnotify.Create {
+					if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+						_ = addWatcherDirs(watcher, event.Name)
+						continue
+					}
+				}
+				if !allowed(event.Name) {
 					continue
 				}
 				ch <- WatchEvent{Path: event.Name, Op: event.Op}
@@ -48,13 +66,36 @@ func StartWatcher(dir string) (<-chan WatchEvent, func() error, error) {
 	return ch, closeFn, nil
 }
 
-func isNoteFile(path string) bool {
+func isLegacyWatchFile(path string) bool {
 	if filepath.Ext(path) != ".md" {
 		return false
 	}
+	return isWatchedFile(path)
+}
+
+func isNoteFile(path string) bool {
+	return isLegacyWatchFile(path)
+}
+
+func isWatchedFile(path string) bool {
 	base := filepath.Base(path)
 	if strings.HasPrefix(base, ".clio_tmp_") {
 		return false
 	}
 	return true
+}
+
+func addWatcherDirs(w *fsnotify.Watcher, root string) error {
+	if _, err := os.Stat(root); err != nil {
+		return err
+	}
+	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		return w.Add(path)
+	})
 }
