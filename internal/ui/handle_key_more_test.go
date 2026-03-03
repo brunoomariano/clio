@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"os"
 	"testing"
 	"time"
 
@@ -12,15 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// TestHandleKeyActions verifies that action keys return commands without errors.
-// This ensures key bindings are wired for create/edit/open/delete and tag prompts.
+// TestHandleKeyActions verifies hotkeys are ignored in favor of menu actions only.
 func TestHandleKeyActions(t *testing.T) {
-	oldEditor := os.Getenv("EDITOR")
-	if err := os.Setenv("EDITOR", "/bin/true"); err != nil {
-		t.Fatalf("set EDITOR failed: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("EDITOR", oldEditor) })
-
 	st := store.NewNoteStore(t.TempDir())
 	idx := index.NewIndex()
 	m := New(model.Config{MaxResults: 10}, st, idx)
@@ -32,28 +24,17 @@ func TestHandleKeyActions(t *testing.T) {
 	idx.Upsert(note)
 	m.applyResults([]index.SearchResult{{Note: note, Score: 1}})
 
-	cases := []rune{'n', 'e', 'd', 't', 'x', 'r'}
+	cases := []rune{'n', 'e', 'd', 't', 'x', 'r', '+', '-', 'q'}
 	for _, r := range cases {
-		_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		if r == 't' || r == 'x' || r == 'r' {
-			// prompt toggles or regex toggle; cmd may be nil
-			continue
-		}
-		if cmd == nil {
-			t.Fatalf("expected command for key %q", r)
+		handled, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		if handled || cmd != nil {
+			t.Fatalf("expected hotkey %q to be ignored", r)
 		}
 	}
 }
 
-// TestHandleKeyOpen verifies that Enter triggers edit when a note is selected.
-// This ensures default open behavior is connected to the selection.
+// TestHandleKeyOpen verifies that Enter in search mode opens the file-action menu.
 func TestHandleKeyOpen(t *testing.T) {
-	oldEditor := os.Getenv("EDITOR")
-	if err := os.Setenv("EDITOR", "/bin/true"); err != nil {
-		t.Fatalf("set EDITOR failed: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("EDITOR", oldEditor) })
-
 	st := store.NewNoteStore(t.TempDir())
 	idx := index.NewIndex()
 	m := New(model.Config{MaxResults: 10}, st, idx)
@@ -62,8 +43,11 @@ func TestHandleKeyOpen(t *testing.T) {
 	idx.Upsert(note)
 	m.applyResults([]index.SearchResult{{Note: note, Score: 1}})
 
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatalf("expected command on enter")
+	handled, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if !handled || cmd != nil {
+		t.Fatalf("expected handled enter with no immediate command")
+	}
+	if m.mode != modeFileActions {
+		t.Fatalf("expected modeFileActions, got %v", m.mode)
 	}
 }

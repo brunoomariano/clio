@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UILayoutContract",
+  "type": "object",
+  "required": ["screen", "width", "height", "layout", "children"],
+  "properties": {
+    "screen": {"type": "string"},
+    "width": {"type": "integer", "minimum": 60},
+    "height": {"type": "integer", "minimum": 10},
+    "layout": {"type": "string", "enum": ["vertical", "horizontal"]},
+    "children": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/node"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["HEADER", "BODY", "FOOTER", "SIDEBAR", "MAIN", "PANEL", "TABLE"]
+        },
+        "layout": {"type": "string", "enum": ["vertical", "horizontal"]},
+        "title": {"type": "string"},
+        "border": {"type": "boolean"},
+        "items": {"type": "array", "items": {"type": "string"}},
+        "selected": {"type": "integer", "minimum": 0},
+        "columns": {"type": "array", "items": {"type": "string"}},
+        "hint": {"type": "string"},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "flex": {"type": "integer", "minimum": 1},
+        "children": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/node"}
+        }
+      },
+      "oneOf": [
+        {"required": ["width"], "not": {"required": ["flex"]}},
+        {"required": ["flex"], "not": {"required": ["width"]}},
+        {"not": {"anyOf": [{"required": ["width"]}, {"required": ["flex"]}]}}
+      ],
+      "additionalProperties": false
+    }
+  }
+}

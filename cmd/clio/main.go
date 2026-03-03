@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"sync"
-	"time"
+	"strings"
 
 	"clio/internal/index"
 	"clio/internal/model"
@@ -20,28 +23,14 @@ type teaProgram interface {
 	Send(tea.Msg)
 }
 
-type ticker interface {
-	Chan() <-chan time.Time
-	Stop()
-}
-
-type realTicker struct {
-	t *time.Ticker
-}
-
-func (r realTicker) Chan() <-chan time.Time { return r.t.C }
-func (r realTicker) Stop()                  { r.t.Stop() }
-
 var runApp = run
 var exitFn = os.Exit
 var loadConfig = model.LoadOrCreateConfig
-var startWatcher = store.StartWatcher
 var userHomeDir = os.UserHomeDir
+var currentDir = os.Getwd
+var cliArgs = func() []string { return os.Args[1:] }
 var newProgram = func(m tea.Model, opts ...tea.ProgramOption) teaProgram {
 	return tea.NewProgram(m, opts...)
-}
-var newTicker = func(d time.Duration) ticker {
-	return realTicker{t: time.NewTicker(d)}
 }
 
 func main() {
@@ -52,12 +41,21 @@ func main() {
 }
 
 func run() error {
+	opts, err := parseRunOptions(cliArgs())
+	if err != nil {
+		return fmt.Errorf("parse args: %w", err)
+	}
+
 	configPath := defaultConfigPath()
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	st := store.NewNoteStore(cfg.NotesDir)
+	if err := applyRunOptions(&cfg, opts); err != nil {
+		return fmt.Errorf("apply args: %w", err)
+	}
+	sources := store.SourcesFromConfig(cfg)
+	st := store.NewNoteStoreWithSources(cfg.PrimarySearchDir(), sources)
 	if err := st.EnsureDir(); err != nil {
 		return fmt.Errorf("ensure notes dir: %w", err)
 	}
@@ -70,68 +68,22 @@ func run() error {
 	idx := index.NewIndex()
 	idx.Reset(notes)
 
-	now := time.Now().UTC()
-	if removed, err := st.PurgeExpired(now); err == nil && len(removed) > 0 {
-		for _, id := range removed {
-			idx.Remove(id)
-		}
-	}
-
 	modelUI := ui.New(cfg, st, idx)
 	program := newProgram(modelUI, tea.WithAltScreen())
 
-	watchCh, closeWatch, err := startWatcher(st.Dir())
+	finalModel, err := program.Run()
 	if err != nil {
-		return fmt.Errorf("start watcher: %w", err)
-	}
-	defer func() { _ = closeWatch() }()
-
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-	defer func() {
-		close(done)
-		wg.Wait()
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for ev := range watchCh {
-			select {
-			case <-done:
-				return
-			default:
-			}
-			if ev.Err != nil {
-				program.Send(ui.WatcherMsg{Err: ev.Err})
-				continue
-			}
-			program.Send(ui.WatcherMsg{Path: ev.Path, Op: ev.Op.String()})
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := newTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.Chan():
-				if removed, err := st.PurgeExpired(time.Now().UTC()); err == nil {
-					for _, id := range removed {
-						idx.Remove(id)
-					}
-					program.Send(ui.WatcherMsg{Path: ""})
-				}
-			}
-		}
-	}()
-
-	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("run ui: %w", err)
+	}
+	viewModel, ok := finalModel.(*ui.Model)
+	if !ok {
+		return nil
+	}
+
+	if editPath := strings.TrimSpace(viewModel.PendingEditorPath()); editPath != "" {
+		if err := runEditor(cfg, editPath); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -142,4 +94,108 @@ func defaultConfigPath() string {
 		return ".clio.yaml"
 	}
 	return filepath.Join(home, ".config", "clio.yaml")
+}
+
+type runOptions struct {
+	cwd         bool
+	suffixesRaw string
+	ignoresRaw  string
+}
+
+func parseRunOptions(args []string) (runOptions, error) {
+	fs := flag.NewFlagSet("clio", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	var opts runOptions
+	fs.BoolVar(&opts.cwd, "cwd", false, "index only the current working directory")
+	fs.StringVar(&opts.suffixesRaw, "suffixes", "", "override suffix patterns for --cwd")
+	fs.StringVar(&opts.ignoresRaw, "ignore_paths", "", "override ignore path patterns for --cwd")
+
+	if err := fs.Parse(args); err != nil {
+		return runOptions{}, err
+	}
+	if len(fs.Args()) > 0 {
+		return runOptions{}, fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	if !opts.cwd && (opts.suffixesRaw != "" || opts.ignoresRaw != "") {
+		return runOptions{}, errors.New("--suffixes and --ignore_paths require --cwd")
+	}
+	return opts, nil
+}
+
+func applyRunOptions(cfg *model.Config, opts runOptions) error {
+	if !opts.cwd {
+		return nil
+	}
+	cwd, err := currentDir()
+	if err != nil {
+		return err
+	}
+
+	dir := model.SearchDir{Path: cwd}
+	if opts.suffixesRaw != "" {
+		patterns, err := parsePatternList(opts.suffixesRaw)
+		if err != nil {
+			return fmt.Errorf("parse --suffixes: %w", err)
+		}
+		dir.Suffixes = patterns
+	}
+	if opts.ignoresRaw != "" {
+		patterns, err := parsePatternList(opts.ignoresRaw)
+		if err != nil {
+			return fmt.Errorf("parse --ignore_paths: %w", err)
+		}
+		dir.IgnorePaths = patterns
+	}
+	cfg.SearchDirs = []model.SearchDir{dir}
+	return nil
+}
+
+func parsePatternList(raw string) ([]string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	// Accept JSON arrays and shell-friendly forms like ['*.md','*.json'].
+	jsonCandidate := strings.ReplaceAll(trimmed, "'", "\"")
+	if strings.HasPrefix(jsonCandidate, "[") {
+		var out []string
+		if err := json.Unmarshal([]byte(jsonCandidate), &out); err != nil {
+			return nil, err
+		}
+		return normalizeList(out), nil
+	}
+	return normalizeList(strings.Split(trimmed, ",")), nil
+}
+
+func normalizeList(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		item = strings.Trim(item, "'\"")
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func runEditor(cfg model.Config, path string) error {
+	editor := strings.TrimSpace(cfg.Editor)
+	if editor == "" {
+		editor = strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if editor == "" {
+		editor = "nvim"
+	}
+	if _, err := exec.LookPath(editor); err != nil {
+		editor = "nano"
+	}
+	cmd := exec.Command(editor, path)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }

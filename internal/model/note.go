@@ -28,6 +28,7 @@ type Note struct {
 	ID        string
 	Title     string
 	Tags      []string
+	Path      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	ExpiresAt *time.Time
@@ -140,7 +141,6 @@ func RenderNote(note *Note) ([]byte, error) {
 	fm := frontmatter{
 		ID:        note.ID,
 		Title:     note.Title,
-		Tags:      NormalizeTags(note.Tags),
 		CreatedAt: note.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: note.UpdatedAt.UTC().Format(time.RFC3339),
 	}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UIStateContract",
+  "type": "object",
+  "required": ["state", "events"],
+  "properties": {
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sidebar_selected": {"type": "integer", "minimum": 0},
+        "active_screen": {"type": "string"},
+        "logs_filter": {"type": "string"},
+        "sidebar_collapsed": {"type": "boolean"}
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/event"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": ["type", "key", "effects"],
+      "properties": {
+        "type": {"type": "string", "enum": ["on_key"]},
+        "key": {"type": "string"},
+        "effects": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

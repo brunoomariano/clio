@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,21 +13,23 @@ import (
 )
 
 type noteItem struct {
-	note *model.Note
+	note  *model.Note
+	query string
 }
 
-func (n noteItem) Title() string { return n.note.Title }
+func (n noteItem) Title() string {
+	if n.note.Path != "" {
+		return filepath.Base(n.note.Path)
+	}
+	return n.note.Title
+}
 func (n noteItem) Description() string {
-	snippet := strings.TrimSpace(n.note.Body)
-	if len(snippet) > 80 {
-		snippet = snippet[:80] + "..."
+	snippet := previewForQuery(n.note.Body, n.query)
+	fullPath := n.note.Path
+	if fullPath == "" {
+		fullPath = "(path unavailable)"
 	}
-	tags := strings.Join(n.note.Tags, ", ")
-	expiry := ""
-	if n.note.ExpiresAt != nil {
-		expiry = " · expires " + n.note.ExpiresAt.Format("2006-01-02")
-	}
-	return fmt.Sprintf("%s\n[%s]%s", snippet, tags, expiry)
+	return fmt.Sprintf("%s\n%s", snippet, fullPath)
 }
 func (n noteItem) FilterValue() string { return n.note.Title }
 
@@ -59,6 +62,44 @@ func renderChips(boost, exclude []string) string {
 		parts = append(parts, excludeStyle.Render(excludeChip))
 	}
 	return strings.TrimSpace(strings.Join(parts, "  "))
+}
+
+func previewForQuery(body, query string) string {
+	content := strings.TrimSpace(body)
+	if content == "" {
+		return "(empty)"
+	}
+	if query == "" {
+		if len(content) > 120 {
+			return content[:120] + "..."
+		}
+		return content
+	}
+	lower := strings.ToLower(content)
+	q := strings.ToLower(strings.TrimSpace(query))
+	idx := strings.Index(lower, q)
+	if idx < 0 {
+		if len(content) > 120 {
+			return content[:120] + "..."
+		}
+		return content
+	}
+	start := idx - 40
+	if start < 0 {
+		start = 0
+	}
+	end := idx + len(q) + 80
+	if end > len(content) {
+		end = len(content)
+	}
+	snippet := strings.TrimSpace(content[start:end])
+	if start > 0 {
+		snippet = "..." + snippet
+	}
+	if end < len(content) {
+		snippet += "..."
+	}
+	return snippet
 }
 
 func formatExpiry(note *model.Note) string {
